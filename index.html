@@ -1717,6 +1717,16 @@
         <div class="input-wrap"><input type="number" id="rv-k" step="0.1" placeholder="Ex: 4.0" oninput="validateField(this, 1.5, 8); computeReactions();"><span class="input-unit">mEq/L</span></div>
       </div>
     </div>
+    <div class="field-row">
+      <div class="field">
+        <label>β-OH-butirato <span style="opacity:.55;font-weight:400;font-size:11px;">(opcional · ADA primário)</span></label>
+        <div class="input-wrap"><input type="number" id="rv-bhb" step="0.1" placeholder="Ex: 0.4" oninput="computeReactions();"><span class="input-unit">mmol/L</span></div>
+      </div>
+      <div class="field">
+        <label>Ânion gap <span style="opacity:.55;font-weight:400;font-size:11px;">(opcional · sem BHB)</span></label>
+        <div class="input-wrap"><input type="number" id="rv-ag" step="0.1" placeholder="Ex: 10" oninput="computeReactions();"><span class="input-unit">mmol/L</span></div>
+      </div>
+    </div>
     <div class="time-since-block">
       <label>Tempo desde a última reavaliação</label>
       <div class="time-chips" id="timeChips">
@@ -2312,7 +2322,7 @@ function openReaval() {
     </div>
     <div class="state-time">${getElapsed(caseData.startTime)}</div>
   `;
-  ['rv-glic', 'rv-ph', 'rv-bic', 'rv-k'].forEach(id => {
+  ['rv-glic', 'rv-ph', 'rv-bic', 'rv-k', 'rv-bhb', 'rv-ag'].forEach(id => {
     const el = document.getElementById(id);
     el.value = '';
     el.classList.remove('invalid');
@@ -2360,6 +2370,8 @@ function computeReactions() {
   const ph = parseFloat(document.getElementById('rv-ph').value);
   const bic = parseFloat(document.getElementById('rv-bic').value);
   const k = parseFloat(document.getElementById('rv-k').value);
+  const bhb = parseFloat(document.getElementById('rv-bhb') ? document.getElementById('rv-bhb').value : NaN);
+  const ag = parseFloat(document.getElementById('rv-ag') ? document.getElementById('rv-ag').value : NaN);
   const minutes = parseInt(document.getElementById('rv-minutes').value) || 120;
 
   // Calcula evTime a partir do tempo desde a última reavaliação (NÃO mais com horário absoluto)
@@ -2384,12 +2396,26 @@ function computeReactions() {
   const rate = diff / hoursSince;        // mg/dL/h
   const naRef = s.naCorr || s.na || 138;
 
-  // Critérios de resolução
-  // ADA: glic<200 E (pH≥7,3 OU bic≥18) — mas com piso de segurança bic≥15
-  // (bic muito baixo é acidose grave, nunca pode ser declarado como resolvido)
-  const resolutionMet = (!isNaN(ph) && !isNaN(bic) && !isNaN(glic)) && (currentGuideline === 'ada'
-    ? ((ph >= 7.3 || bic >= 18) && glic < 200 && bic >= 15)
-    : (ph >= 7.3 && bic >= 18 && glic < 200));
+  // ====== CRITÉRIOS DE RESOLUÇÃO ADA 2024 (portado do calc-med) ======
+  // Umpierrez et al. Diabetes Care 2024;47(8):1257-1275
+  // Hierarquia ADA 2024: BHB <0,6 (primário) > AG ≤12 (substituto) > nenhum
+  // Resolução = glic<200 E (pH≥7,3 OU bic≥18) E cetonaOk E !hipo E !K-baixo
+  const hipo = !isNaN(glic) && glic < 70;
+  const kBaixoSeguranca = !isNaN(k) && k < t.kPause;
+  const bhbInformado = !isNaN(bhb);
+  const agInformado = !isNaN(ag);
+  const bhbOk = bhbInformado ? (bhb < 0.6) : null;
+  const agOk = agInformado ? (ag <= 12) : null;
+  // Hierarquia: se BHB informado usa BHB; senão AG; senão assume ok (cetona não informada)
+  const cetonaOk = (bhbOk !== null) ? bhbOk : (agOk !== null) ? agOk : true;
+  const acidoBaseOk = (!isNaN(ph) && ph >= 7.3) || (!isNaN(bic) && bic >= 18);
+  // Trava de discordância: pH normal MAS bic muito baixo SEM cetona → suspeita acidose hiperclorêmica
+  const discordante = (!isNaN(ph) && ph >= 7.3 && !isNaN(bic) && bic < 15);
+
+  const resolutionMet = (!isNaN(ph) && !isNaN(bic) && !isNaN(glic)) && !hipo && !kBaixoSeguranca &&
+    (currentGuideline === 'ada'
+      ? (glic < 200 && acidoBaseOk && cetonaOk)
+      : (ph >= 7.3 && bic >= 18 && glic < 200));
 
   // Categoria da glicemia
   let glicCat; // 'refrat' | 'lenta' | 'meta' | 'rapida'
@@ -2508,16 +2534,43 @@ function computeReactions() {
       txt: '<b>🎉 CRITÉRIOS DE RESOLUÇÃO ATINGIDOS</b> · CAD compensada',
       cls: 'ok'
     });
-    // ② Critérios preenchidos com valores reais — ✓ verde se atende, ✗ vermelho se não
+    // ② Critérios preenchidos com valores reais — hierarquia ADA: BHB > AG > assumido
     const ok = '<span style="color:var(--green);font-weight:800">✓</span>';
     const no = '<span style="color:var(--red);font-weight:800">✗</span>';
     const critGlic = `Glicemia ${glic} mg/dL (&lt; 200) ${glic < 200 ? ok : no}`;
     const critPh = `pH ${ph} (≥ 7,3) ${ph >= 7.3 ? ok : no}`;
     const critBic = `Bic ${bic} mmol/L (≥ 18) ${bic >= 18 ? ok : no}`;
+
+    // Linha de cetona — hierarquia BHB > AG > nenhum
+    let linhaCetona = '';
+    if (bhbInformado) {
+      linhaCetona = `<br>· β-OH-butirato ${bhb} mmol/L (&lt; 0,6) ${bhbOk ? ok : no}`;
+    } else if (agInformado) {
+      linhaCetona = `<br>· AG ${ag} mmol/L (≤ 12) ${agOk ? ok : no} <span style="opacity:.7;font-size:11px;">(substituto do BHB — ADA 2024)</span>`;
+    } else {
+      linhaCetona = `<br><span style="opacity:.7;font-size:11px;">· BHB e AG não informados — confirme cetonas se disponível antes de desligar a bomba</span>`;
+    }
+    const notaOU = `<br><span style="opacity:.75;font-size:11px;font-style:italic;">Regra ADA 2024: glic&lt;200 + (pH≥7,3 <b>OU</b> bic≥18) + cetona&lt;0,6 <b>ou</b> AG≤12. ✗ = atingido pelo outro parâmetro.</span>`;
+    // Trava de discordância: pH normal MAS bic baixo sem AG/BHB — pode ser acidose hiperclorêmica
+    // Nível LEVE (bic 10-14): alerta âmbar inline
+    const discordanciaLeve = discordante && bic >= 10 && !bhbInformado && !agInformado;
+    const notaDisc = discordanciaLeve
+      ? `<br><span style="color:var(--amber);font-size:11px;font-weight:600;">⚠ Bic ${bic} baixo sem AG/BHB — pode ser acidose hiperclorêmica do SF. Informe o AG: se ≤12 = CAD resolvida; se &gt;12 = cetonas ainda presentes.</span>`
+      : '';
     conducts.push({
-      txt: `<b>Critérios preenchidos (ADA 2024):</b><br>· ${critGlic}<br>· ${critPh}<br>· ${critBic}<br><span style="font-size:11px;opacity:.75;font-style:italic;">ADA aceita pH≥7,3 OU Bic≥18 (com glic&lt;200) — desde que Bic ≥ 15 (piso de segurança)</span>`,
+      txt: `<b>Critérios preenchidos (ADA 2024):</b><br>· ${critGlic}<br>· ${critPh}<br>· ${critBic}${linhaCetona}${notaOU}${notaDisc}`,
       cls: 'ok'
     });
+
+    // Nível EXTREMO (bic <10 sem cetona/AG): linha separada, vermelha, MUITO visível
+    // Não bloqueia a resolução (segue calc-med), mas força o usuário a ler antes de prosseguir
+    const discordanciaExtrema = !isNaN(bic) && bic < 10 && !isNaN(ph) && ph >= 7.3 && !bhbInformado && !agInformado;
+    if (discordanciaExtrema) {
+      conducts.push({
+        txt: `<b style="font-size:15px;">🚨 ATENÇÃO · Bic ${bic} mmol/L é acidose grave</b><br>Critérios ADA tecnicamente bateram pelo pH, mas <b>Bic &lt;10 sem dosagem de cetona/AG não confirma resolução com segurança</b>. Antes de desligar a bomba: dose β-OH-butirato ou calcule o AG. Se AG &gt;12 ou BHB ≥0,6, mantenha insulina EV.`,
+        cls: 'alert'
+      });
+    }
     // ③ Passo 1 — Liberar dieta
     conducts.push({
       txt: '<b>Passo 1 · Liberar dieta VO</b> (pelo menos 1 refeição com cobertura de insulina)'
@@ -2551,6 +2604,23 @@ function computeReactions() {
       conducts
     });
   } else {
+    // ====== ALERTA: cetose ativa mesmo com pH/bic ok (ADA 2024 — cetona manda) ======
+    // Se pH≥7,3 + bic≥18 + glic<200 já bateu mas BHB≥0,6 ou AG>12, a CAD ainda NÃO resolveu
+    if (currentGuideline === 'ada' && !isNaN(ph) && !isNaN(bic) && !isNaN(glic) &&
+        acidoBaseOk && glic < 200 && !hipo && !kBaixoSeguranca) {
+      if (bhbInformado && !bhbOk) {
+        conducts.push({
+          txt: `<b>⚠️ Ainda NÃO resolveu</b> · β-OH-butirato <b>${bhb} mmol/L</b> (≥ 0,6) = cetose ativa mesmo com pH/bic ok. <b>Cetona manda (ADA 2024)</b> — manter insulina EV até BHB &lt; 0,6 mmol/L.`,
+          cls: 'warn'
+        });
+      } else if (!bhbInformado && agInformado && !agOk) {
+        conducts.push({
+          txt: `<b>⚠️ Ainda NÃO resolveu</b> · AG <b>${ag} mmol/L</b> (&gt; 12) = cetonas ainda presentes (pH/bic podem normalizar antes do AG). Manter insulina EV — reavaliar quando AG ≤ 12 ou BHB &lt; 0,6.`,
+          cls: 'warn'
+        });
+      }
+    }
+
     // Conduta única integrada — só inclui linha quando há ação
     if (kCat === 'critico' && bombaTxt) conducts.push({ txt: bombaTxt });      // pausa bomba aparece primeiro
     else if (bombaTxt) conducts.push({ txt: bombaTxt });
@@ -2600,7 +2670,7 @@ function computeReactions() {
 
   // armazena last reactions pra usar no confirmReaval
   window._lastReactions = reactions;
-  window._lastReavalData = { glic, ph, bic, k, evTime, hoursSince };
+  window._lastReavalData = { glic, ph, bic, k, bhb, ag, evTime, hoursSince };
 }
 
 function confirmReaval() {
@@ -2620,8 +2690,15 @@ function confirmReaval() {
   const rate = (s.glic - data.glic) / data.hoursSince;
   const reactions = window._lastReactions || [];
 
-  const resolutionMet = (currentGuideline === 'ada'
-    ? ((data.ph >= 7.3 || data.bic >= 18) && data.glic < 200 && data.bic >= 15)
+  // Resolução ADA 2024 com hierarquia BHB > AG (igual ao computeReactions)
+  const bhbInformadoCR = !isNaN(data.bhb);
+  const agInformadoCR = !isNaN(data.ag);
+  const cetonaOkCR = bhbInformadoCR ? (data.bhb < 0.6) : agInformadoCR ? (data.ag <= 12) : true;
+  const acidoBaseOkCR = (data.ph >= 7.3 || data.bic >= 18);
+  const hipoCR = !isNaN(data.glic) && data.glic < 70;
+  const kBaixoCR = !isNaN(data.k) && data.k < t.kPause;
+  const resolutionMet = !hipoCR && !kBaixoCR && (currentGuideline === 'ada'
+    ? (data.glic < 200 && acidoBaseOkCR && cetonaOkCR)
     : (data.ph >= 7.3 && data.bic >= 18 && data.glic < 200));
 
   // Determina ação principal da bomba e solução
