@@ -2385,8 +2385,10 @@ function computeReactions() {
   const naRef = s.naCorr || s.na || 138;
 
   // Critérios de resolução
-  const resolutionMet = (!isNaN(ph) && !isNaN(bic)) && (currentGuideline === 'ada'
-    ? ((ph >= 7.3 || bic >= 18) && glic < 200)
+  // ADA: glic<200 E (pH≥7,3 OU bic≥18) — mas com piso de segurança bic≥15
+  // (bic muito baixo é acidose grave, nunca pode ser declarado como resolvido)
+  const resolutionMet = (!isNaN(ph) && !isNaN(bic) && !isNaN(glic)) && (currentGuideline === 'ada'
+    ? ((ph >= 7.3 || bic >= 18) && glic < 200 && bic >= 15)
     : (ph >= 7.3 && bic >= 18 && glic < 200));
 
   // Categoria da glicemia
@@ -2506,12 +2508,14 @@ function computeReactions() {
       txt: '<b>🎉 CRITÉRIOS DE RESOLUÇÃO ATINGIDOS</b> · CAD compensada',
       cls: 'ok'
     });
-    // ② Critérios preenchidos com valores reais
-    const critGlic = `Glicemia ${glic} mg/dL (&lt; 200) ${glic < 200 ? '✓' : ''}`;
-    const critPh = `pH ${ph} (≥ 7,3) ${ph >= 7.3 ? '✓' : ''}`;
-    const critBic = `Bic ${bic} mmol/L (≥ 18) ${bic >= 18 ? '✓' : ''}`;
+    // ② Critérios preenchidos com valores reais — ✓ verde se atende, ✗ vermelho se não
+    const ok = '<span style="color:var(--green);font-weight:800">✓</span>';
+    const no = '<span style="color:var(--red);font-weight:800">✗</span>';
+    const critGlic = `Glicemia ${glic} mg/dL (&lt; 200) ${glic < 200 ? ok : no}`;
+    const critPh = `pH ${ph} (≥ 7,3) ${ph >= 7.3 ? ok : no}`;
+    const critBic = `Bic ${bic} mmol/L (≥ 18) ${bic >= 18 ? ok : no}`;
     conducts.push({
-      txt: `<b>Critérios preenchidos (ADA 2024):</b><br>· ${critGlic}<br>· ${critPh}<br>· ${critBic}`,
+      txt: `<b>Critérios preenchidos (ADA 2024):</b><br>· ${critGlic}<br>· ${critPh}<br>· ${critBic}<br><span style="font-size:11px;opacity:.75;font-style:italic;">ADA aceita pH≥7,3 OU Bic≥18 (com glic&lt;200) — desde que Bic ≥ 15 (piso de segurança)</span>`,
       cls: 'ok'
     });
     // ③ Passo 1 — Liberar dieta
@@ -2617,7 +2621,7 @@ function confirmReaval() {
   const reactions = window._lastReactions || [];
 
   const resolutionMet = (currentGuideline === 'ada'
-    ? ((data.ph >= 7.3 || data.bic >= 18) && data.glic < 200)
+    ? ((data.ph >= 7.3 || data.bic >= 18) && data.glic < 200 && data.bic >= 15)
     : (data.ph >= 7.3 && data.bic >= 18 && data.glic < 200));
 
   // Determina ação principal da bomba e solução
